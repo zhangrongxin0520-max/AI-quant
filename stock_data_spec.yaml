@@ -1,0 +1,359 @@
+# ============================================================================
+# stock_data_spec.yaml - 股票数据取数规范
+# ============================================================================
+# 用途: 定义标准化取数流程，供 fetch_stocks.py 脚本读取执行
+# 版本: 2.0
+# 创建: 2026-07-04
+# 更新: 2026-07-04
+# ============================================================================
+
+# ── 项目元信息 ──────────────────────────────────────────────────────────────
+project:
+  name: "AI Quant"
+  description: "A股量化分析数据集"
+  author: "zhangrongxin"
+
+# ── 数据源配置 ──────────────────────────────────────────────────────────────
+data_source:
+  primary: tushare_mcp
+  description: "通过 Tushare MCP 连接器获取金融数据，已配置于 ~/.workbuddy/mcp.json"
+  fallback:
+    - westock_data    # 腾讯自选股数据接口
+    - neodata_search  # 自然语言金融数据检索
+  note: "优先使用 Tushare MCP，权限不足时回退到 WeStock/NeoData"
+
+# ── 复权模式（全局默认） ──────────────────────────────────────────────────
+adjustment:
+  mode: "qfq"          # 默认复权模式: qfq(前复权) | hfq(后复权) | none(不复权)
+  description: >
+    前复权（qfq）保持最新价格不变，向前调整历史价格，消除分红送股造成的价格跳空。
+    后复权（hfq）保持最早价格不变，向后调整后续价格。
+    A股技术分析惯例默认使用前复权。
+  note: >
+    stk_factor 接口同时返回 qfq/hfq/none 三种价格，输出文件包含全部三种以支持不同分析场景。
+time_range:
+  default:
+    start: "2025-07-04"
+    end: "2026-07-04"
+    description: "近一年交易数据"
+  format: "YYYYMMDD"
+  histories:
+    y1: { start: "2025-07-04", end: "2026-07-04", description: "近一年" }
+    y3: { start: "2023-07-04", end: "2026-07-04", description: "近三年" }
+    y5: { start: "2021-07-04", end: "2026-07-04", description: "近五年" }
+    all: { start: "20000101", end: "2026-07-04", description: "全历史" }
+
+# ============================================================================
+# 股票池定义
+# ============================================================================
+stock_pool:
+  # ── 中芯国际 ──
+  - id: smic
+    ts_code: "688981.SH"
+    name: "中芯国际"
+    symbol: "688981"
+    market: "科创板"
+    exchange: "SSE"
+    industry: "半导体"
+    sub_industry: "集成电路制造"
+    list_date: "2020-07-16"
+    tags: ["芯片", "半导体制造", "科创板龙头"]
+    note: "中国大陆技术最先进、规模最大的集成电路晶圆代工企业"
+
+  # ── 比亚迪 ──
+  - id: byd
+    ts_code: "002594.SZ"
+    name: "比亚迪"
+    symbol: "002594"
+    market: "主板"
+    exchange: "SZSE"
+    industry: "汽车"
+    sub_industry: "新能源整车"
+    list_date: "2011-06-30"
+    tags: ["新能源车", "电池", "比亚迪产业链"]
+    note: "全球领先的新能源汽车制造商，同时覆盖电池、电子、轨道交通"
+
+  # ── 长江电力 ──
+  - id: cjdl
+    ts_code: "600900.SH"
+    name: "长江电力"
+    symbol: "600900"
+    market: "主板"
+    exchange: "SSE"
+    industry: "电力"
+    sub_industry: "水力发电"
+    list_date: "2003-11-18"
+    tags: ["水电", "高股息", "防御型"]
+    note: "全球最大的水电上市公司，经营三峡、葛洲坝等电站"
+
+# ============================================================================
+# 数据维度定义
+# 每个维度对应一个 Tushare API，定义字段、输出格式、存储路径
+# ============================================================================
+dimensions:
+
+  # ── 1. 日线行情（含复权） ──
+  - id: daily_price
+    name: "日线行情"
+    api: stk_factor
+    description: >
+      每日 OHLCV 行情 + 前/后复权价格。stk_factor 接口同时返回不复权(close/open/...)、
+      前复权(close_qfq/...)和后复权(close_hfq/...)三套价格，一次调用即可获得全部。
+      技术分析建议使用前复权（close_qfq），它能消除分红送股造成的价格跳空。
+    priority: 1
+    fields:
+      # 标识
+      - { name: ts_code,         cn: "股票代码",     type: str,     unit: "",     note: "如 688981.SH" }
+      - { name: trade_date,      cn: "交易日期",     type: date,    unit: "",     note: "YYYYMMDD" }
+      # 不复权 OHLCV（原始价格）
+      - { name: open,            cn: "开盘价",       type: float,   unit: "元",   note: "不复权" }
+      - { name: high,            cn: "最高价",       type: float,   unit: "元",   note: "不复权" }
+      - { name: low,             cn: "最低价",       type: float,   unit: "元",   note: "不复权" }
+      - { name: close,           cn: "收盘价",       type: float,   unit: "元",   note: "不复权" }
+      - { name: pre_close,       cn: "前收盘价",     type: float,   unit: "元",   note: "不复权" }
+      - { name: change,          cn: "涨跌额",       type: float,   unit: "元",   note: "不复权, close-pre_close" }
+      - { name: pct_change,      cn: "涨跌幅",       type: float,   unit: "%",    note: "不复权, (close-pre_close)/pre_close*100" }
+      - { name: vol,             cn: "成交量",       type: float,   unit: "手",   note: "" }
+      - { name: amount,          cn: "成交额",       type: float,   unit: "千元", note: "" }
+      # 前复权价格（推荐用于技术分析）
+      - { name: open_qfq,        cn: "开盘价(前复权)",   type: float, unit: "元", note: "消除历史分红送股影响" }
+      - { name: high_qfq,        cn: "最高价(前复权)",   type: float, unit: "元", note: "" }
+      - { name: low_qfq,         cn: "最低价(前复权)",   type: float, unit: "元", note: "" }
+      - { name: close_qfq,       cn: "收盘价(前复权)",   type: float, unit: "元", note: "推荐用于计算收益率和画K线" }
+      - { name: pre_close_qfq,   cn: "前收盘价(前复权)", type: float, unit: "元", note: "" }
+      # 后复权价格（保留历史绝对值）
+      - { name: open_hfq,        cn: "开盘价(后复权)",   type: float, unit: "元", note: "保留最早价格不变" }
+      - { name: high_hfq,        cn: "最高价(后复权)",   type: float, unit: "元", note: "" }
+      - { name: low_hfq,         cn: "最低价(后复权)",   type: float, unit: "元", note: "" }
+      - { name: close_hfq,       cn: "收盘价(后复权)",   type: float, unit: "元", note: "可观测历史真实涨幅" }
+      - { name: pre_close_hfq,   cn: "前收盘价(后复权)", type: float, unit: "元", note: "" }
+      # 复权因子
+      - { name: adj_factor,      cn: "复权因子",     type: float,   unit: "",     note: "1.0 代表未发生除权" }
+    usage_note: >
+      【重要】stk_factor 返回的字段名是 pct_change（而非 daily 的 pct_chg），请脚本/取数代码注意字段名差异。
+    output:
+      format: csv
+      dir: "data/daily/"
+      encoding: "utf-8-sig"
+      naming: "{stock_id}_daily.csv"
+
+  # ── 2. 每日基本面指标 ──
+  - id: daily_basic
+    name: "每日指标"
+    api: daily_basic
+    description: "每日估值与市值指标，包括 PE、PB、市值、换手率等"
+    priority: 2
+    fields:
+      - { name: ts_code,         cn: "股票代码",     type: str,     unit: "",     note: "" }
+      - { name: trade_date,      cn: "交易日期",     type: date,    unit: "",     note: "" }
+      - { name: close,           cn: "收盘价",       type: float,   unit: "元",   note: "" }
+      - { name: turnover_rate,   cn: "换手率",       type: float,   unit: "%",    note: "" }
+      - { name: turnover_rate_f, cn: "换手率(自由流通股)", type: float, unit: "%", note: "" }
+      - { name: volume_ratio,    cn: "量比",         type: float,   unit: "",     note: "" }
+      - { name: pe,              cn: "市盈率",       type: float,   unit: "倍",   note: "" }
+      - { name: pe_ttm,          cn: "市盈率(TTM)",  type: float,   unit: "倍",   note: "" }
+      - { name: pb,              cn: "市净率",       type: float,   unit: "倍",   note: "" }
+      - { name: ps,              cn: "市销率",       type: float,   unit: "倍",   note: "" }
+      - { name: ps_ttm,          cn: "市销率(TTM)",  type: float,   unit: "倍",   note: "" }
+      - { name: total_share,     cn: "总股本",       type: float,   unit: "万股", note: "" }
+      - { name: float_share,     cn: "流通股本",     type: float,   unit: "万股", note: "" }
+      - { name: total_mv,        cn: "总市值",       type: float,   unit: "万元", note: "" }
+      - { name: circ_mv,         cn: "流通市值",     type: float,   unit: "万元", note: "" }
+    output:
+      format: csv
+      dir: "data/daily_basic/"
+      encoding: "utf-8-sig"
+      naming: "{stock_id}_daily_basic.csv"
+
+  # ── 3. 财务指标（季度） ──
+  - id: financial
+    name: "财务指标"
+    api: fina_indicator
+    description: "季度财务指标，包含盈利能力、偿债能力、成长能力、营运能力等"
+    priority: 3
+    fields:
+      # 核心指标
+      - { name: ts_code,        cn: "股票代码",     type: str,   unit: "",   note: "" }
+      - { name: ann_date,       cn: "公告日期",     type: date,  unit: "",   note: "" }
+      - { name: end_date,       cn: "报告期",       type: date,  unit: "",   note: "季度末日期" }
+      # 盈利指标
+      - { name: eps,            cn: "每股收益",     type: float, unit: "元", note: "" }
+      - { name: bps,            cn: "每股净资产",   type: float, unit: "元", note: "" }
+      - { name: roe,            cn: "净资产收益率", type: float, unit: "%",  note: "" }
+      - { name: roa,            cn: "总资产收益率", type: float, unit: "%",  note: "" }
+      - { name: roic,           cn: "投入资本回报率", type: float, unit: "%", note: "" }
+      - { name: gross_margin,   cn: "毛利率",       type: float, unit: "%",  note: "" }
+      - { name: netprofit_margin, cn: "净利率",     type: float, unit: "%",  note: "" }
+      # 成长指标
+      - { name: or_yoy,         cn: "营收同比",     type: float, unit: "%",  note: "" }
+      - { name: netprofit_yoy,  cn: "净利润同比",   type: float, unit: "%",  note: "" }
+      - { name: op_yoy,         cn: "营业利润同比", type: float, unit: "%",  note: "" }
+      # 偿债指标
+      - { name: debt_to_assets, cn: "资产负债率",   type: float, unit: "%",  note: "" }
+      - { name: current_ratio,  cn: "流动比率",     type: float, unit: "倍", note: "" }
+      - { name: quick_ratio,    cn: "速动比率",     type: float, unit: "倍", note: "" }
+      # 现金流
+      - { name: ocfps,          cn: "每股经营现金流", type: float, unit: "元", note: "" }
+      - { name: cfps,           cn: "每股现金流",   type: float, unit: "元", note: "" }
+    output:
+      format: csv
+      dir: "data/financial/"
+      encoding: "utf-8-sig"
+      naming: "{stock_id}_financial.csv"
+
+  # ── 4. 资金流向 ──
+  - id: money_flow
+    name: "资金流向"
+    api: moneyflow
+    description: "大单、中单、小单资金流向，用于跟踪主力资金动向"
+    priority: 4
+    fields:
+      - { name: ts_code,        cn: "股票代码",   type: str,   unit: "",   note: "" }
+      - { name: trade_date,     cn: "交易日期",   type: date,  unit: "",   note: "" }
+      - { name: buy_sm_vol,     cn: "小单买入量", type: float, unit: "手", note: "" }
+      - { name: sell_sm_vol,    cn: "小单卖出量", type: float, unit: "手", note: "" }
+      - { name: buy_md_vol,     cn: "中单买入量", type: float, unit: "手", note: "" }
+      - { name: sell_md_vol,    cn: "中单卖出量", type: float, unit: "手", note: "" }
+      - { name: buy_lg_vol,     cn: "大单买入量", type: float, unit: "手", note: "" }
+      - { name: sell_lg_vol,    cn: "大单卖出量", type: float, unit: "手", note: "" }
+      - { name: buy_elg_vol,    cn: "超大单买入量", type: float, unit: "手", note: "" }
+      - { name: sell_elg_vol,   cn: "超大单卖出量", type: float, unit: "手", note: "" }
+      - { name: net_mf_vol,     cn: "净流入量",   type: float, unit: "手", note: "" }
+      - { name: net_mf_amount,  cn: "净流入额",   type: float, unit: "万元", note: "" }
+    output:
+      format: csv
+      dir: "data/money_flow/"
+      encoding: "utf-8-sig"
+      naming: "{stock_id}_money_flow.csv"
+
+  # ── 5. 技术指标（仅指标，价格见 daily_price） ──
+  - id: technical
+    name: "技术指标"
+    api: stk_factor
+    description: >
+      技术分析指标（MACD、KDJ、RSI、BOLL、CCI）。价格数据已在 daily_price 维度中包含，
+      本维度仅输出纯技术指标字段，避免数据冗余。如需完整价格+指标，直接使用 daily_price 输出即可。
+    priority: 5
+    fields:
+      - { name: ts_code,        cn: "股票代码",     type: str,   unit: "",   note: "" }
+      - { name: trade_date,     cn: "交易日期",     type: date,  unit: "",   note: "" }
+      # MACD
+      - { name: macd_dif,       cn: "MACD_DIF",    type: float, unit: "",   note: "快线（EMA12-EMA26）" }
+      - { name: macd_dea,       cn: "MACD_DEA",    type: float, unit: "",   note: "慢线（DIF的EMA9）" }
+      - { name: macd,           cn: "MACD柱",      type: float, unit: "",   note: "2*(DIF-DEA)" }
+      # KDJ
+      - { name: kdj_k,          cn: "KDJ_K",       type: float, unit: "",   note: "" }
+      - { name: kdj_d,          cn: "KDJ_D",       type: float, unit: "",   note: "" }
+      - { name: kdj_j,          cn: "KDJ_J",       type: float, unit: "",   note: "" }
+      # RSI
+      - { name: rsi_6,          cn: "RSI_6",       type: float, unit: "",   note: "6日相对强弱" }
+      - { name: rsi_12,         cn: "RSI_12",      type: float, unit: "",   note: "12日相对强弱" }
+      - { name: rsi_24,         cn: "RSI_24",      type: float, unit: "",   note: "24日相对强弱" }
+      # BOLL
+      - { name: boll_upper,     cn: "BOLL上轨",    type: float, unit: "元", note: "" }
+      - { name: boll_mid,       cn: "BOLL中轨",    type: float, unit: "元", note: "" }
+      - { name: boll_lower,     cn: "BOLL下轨",    type: float, unit: "元", note: "" }
+      # CCI
+      - { name: cci,            cn: "CCI",         type: float, unit: "",   note: "商品通道指数" }
+    output:
+      format: csv
+      dir: "data/technical/"
+      encoding: "utf-8-sig"
+      naming: "{stock_id}_technical.csv"
+
+  # ── 6. 复权因子（辅助维度，通常无需单独获取） ──
+  - id: adj_factor
+    name: "复权因子"
+    api: adj_factor
+    description: >
+      复权因子序列。daily_price 维度（stk_factor）已包含 adj_factor 字段和完整的前/后复权价格，
+      通常不需要单独获取此维度。仅在需要自行计算自定义复权价格时使用。
+    priority: 6
+    fields:
+      - { name: ts_code,    cn: "股票代码", type: str,   unit: "", note: "" }
+      - { name: trade_date, cn: "交易日期", type: date,  unit: "", note: "" }
+      - { name: adj_factor, cn: "复权因子", type: float, unit: "", note: "1.0 代表未发生除权" }
+    output:
+      format: csv
+      dir: "data/adj_factor/"
+      encoding: "utf-8-sig"
+      naming: "{stock_id}_adj_factor.csv"
+
+# ============================================================================
+# 股票基本信息（一次性获取）
+# ============================================================================
+stock_info:
+  api: stock_basic
+  description: "股票基础信息，包含上市日期、行业分类、是否沪深港通等"
+  fields:
+    - ts_code
+    - symbol
+    - name
+    - area
+    - industry
+    - market
+    - list_date
+    - exchange
+    - is_hs
+  output:
+    format: csv
+    dir: "data/"
+    filename: "stock_info.csv"
+
+# ============================================================================
+# 数据校验规则
+# ============================================================================
+validation:
+  # 通用校验
+  required_fields: true          # 必填字段非空检查
+  date_order_asc: true           # 日期升序排列
+  date_continuity_warn: true     # 日期连续性警告（非强制）
+  null_threshold: 0.05           # 空值率阈值（超过则警告）
+  
+  # 行情数据专项校验
+  price_consistency:
+    high_ge_low: true            # 最高价 >= 最低价
+    high_ge_open: true           # 最高价 >= 开盘价
+    high_ge_close: true          # 最高价 >= 收盘价
+    low_le_open: true            # 最低价 <= 开盘价
+    low_le_close: true           # 最低价 <= 收盘价
+    vol_amount_positive: true    # 成交量、成交额非负（停牌日可为0）
+
+  # 财务数据专项校验
+  financial:
+    period_consistency: true     # 报告期格式校验
+    eps_roe_consistency: true    # EPS 与 ROE 的逻辑一致性
+
+# ============================================================================
+# 输出配置
+# ============================================================================
+output:
+  base_dir: "./data"             # 数据根目录（相对于项目根路径）
+  default_format: csv            # 默认输出格式
+  encoding: "utf-8-sig"         # 默认编码（兼容 Excel 中文）
+  date_format: "%Y%m%d"         # 日期输出格式
+  
+  # 目录结构预览：
+  # data/
+  # ├── stock_info.csv           # 股票基本信息
+  # ├── daily/                   # 日线行情
+  # │   ├── smic_daily.csv
+  # │   ├── byd_daily.csv
+  # │   └── cjdl_daily.csv
+  # ├── daily_basic/             # 每日指标
+  # ├── financial/               # 财务指标
+  # ├── money_flow/              # 资金流向
+  # ├── technical/               # 技术面因子
+  # └── adj_factor/              # 复权因子
+
+# ============================================================================
+# 执行配置
+# ============================================================================
+execution:
+  mode: "mcp"                    # 取数模式: mcp | http_api
+  concurrency: sequential        # 并发策略: sequential | parallel
+  retry: 3                       # 失败重试次数
+  retry_delay: 2                 # 重试间隔（秒）
+  rate_limit:                    # 接口限速
+    tushare: { max_per_minute: 200 }
+  log_level: info                # 日志级别: debug | info | warn | error
