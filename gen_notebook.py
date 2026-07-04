@@ -1,0 +1,390 @@
+#!/usr/bin/env python3
+"""生成中芯国际数据分析 Jupyter Notebook"""
+import json
+
+nb = {"nbformat": 4, "nbformat_minor": 5, "metadata": {
+    "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+    "language_info": {"name": "python", "version": "3.x"}
+}, "cells": []}
+
+def md(source):
+    nb["cells"].append({"cell_type": "markdown", "metadata": {}, "source": source if isinstance(source, list) else [source]})
+
+def code(source):
+    nb["cells"].append({"cell_type": "code", "metadata": {}, "source": source if isinstance(source, list) else [source], "execution_count": None, "outputs": []})
+
+# === 标题 ===
+md([
+    "# 中芯国际（688981.SH）交易数据获取与可视化\n\n",
+    "本 Notebook 演示了通过 **Tushare API** 获取中芯国际近一年日线行情数据，并使用 **Matplotlib** 绘制 K线图和交易量图的完整流程。\n\n",
+    "## 流程概述\n",
+    "1. 调用 Tushare HTTP API 获取日线行情数据\n",
+    "2. 数据清洗与格式转换\n",
+    "3. 存储为本地 JSON / CSV 文件\n",
+    "4. 使用 Matplotlib 绘制 K线图（含均线）\n",
+    "5. 绘制交易量柱状图\n",
+    "6. 月度统计分析\n\n",
+    "## 数据来源\n",
+    "- **接口**: Tushare `daily`（日线行情）\n",
+    "- **标的**: 中芯国际 688981.SH（科创板）\n",
+    "- **时间范围**: 2025-07-04 ~ 2026-07-03"
+])
+
+# === Cell 1: 导入库 ===
+md("## 1. 导入依赖库")
+code([
+    "import urllib.request\n",
+    "import json\n",
+    "import csv\n",
+    "import os\n",
+    "import pandas as pd\n",
+    "import numpy as np\n",
+    "import matplotlib.pyplot as plt\n",
+    "import matplotlib.dates as mdates\n",
+    "from matplotlib.patches import Rectangle\n",
+    "from datetime import datetime, timedelta\n",
+    "\n",
+    "# 设置中文字体（macOS）\n",
+    'plt.rcParams["font.sans-serif"] = ["Arial Unicode MS", "Heiti TC", "PingFang SC"]\n',
+    'plt.rcParams["axes.unicode_minus"] = False\n',
+    "\n",
+    'print("库导入完成 ✅")'
+])
+
+# === Cell 2: API配置 ===
+md([
+    "## 2. 配置 Tushare API\n\n",
+    "设置 API Token 和请求参数。Tushare 采用 POST 方式调用，传入 `api_name`、`token`、`params` 和 `fields`。"
+])
+code([
+    '# Tushare API 配置\n',
+    'TOKEN = "your_tushare_token_here"  # 替换为你的 Tushare Token\n',
+    'API_URL = "https://api.tushare.pro"\n',
+    "\n",
+    '# 查询参数\n',
+    'TS_CODE = "688981.SH"       # 中芯国际（科创板）\n',
+    'START_DATE = "20250704"    # 近一年起始日期\n',
+    'END_DATE = "20260704"      # 近一年结束日期\n',
+    "\n",
+    'print(f"标的: {TS_CODE} (中芯国际)")\n',
+    'print(f"时间范围: {START_DATE} ~ {END_DATE}")'
+])
+
+# === Cell 3: API函数 ===
+md([
+    "### 2.1 定义 API 调用函数\n\n",
+    "封装 Tushare HTTP API 调用逻辑。"
+])
+code([
+    "def call_tushare(api_name, params, fields=None):\n",
+    '    """调用 Tushare HTTP API"""\n',
+    "    payload = {\"api_name\": api_name, \"token\": TOKEN, \"params\": params}\n",
+    "    if fields:\n",
+    "        payload[\"fields\"] = fields\n",
+    "    data = json.dumps(payload).encode(\"utf-8\")\n",
+    "    req = urllib.request.Request(API_URL, data=data, headers={\"Content-Type\": \"application/json\"})\n",
+    "    resp = urllib.request.urlopen(req, timeout=60)\n",
+    "    return json.loads(resp.read().decode(\"utf-8\"))\n",
+    "\n",
+    'print("API 调用函数已定义 ✅")'
+])
+
+# === Cell 4: 获取数据 ===
+md([
+    "## 3. 获取日线行情数据\n\n",
+    "调用 `daily` 接口获取中芯国际的 OHLCV 数据。\n\n",
+    "**字段说明：**\n",
+    "| 字段 | 含义 |\n",
+    "|---|---|\n",
+    "| `open` | 开盘价 |\n",
+    "| `high` | 最高价 |\n",
+    "| `low` | 最低价 |\n",
+    "| `close` | 收盘价 |\n",
+    "| `pre_close` | 前收盘价 |\n",
+    "| `change` | 涨跌额 |\n",
+    "| `pct_chg` | 涨跌幅（%）|\n",
+    "| `vol` | 成交量（手）|\n",
+    "| `amount` | 成交额（千元）|"
+])
+code([
+    '# 调用 daily 接口获取日线数据\n',
+    "response = call_tushare(\n",
+    '    api_name="daily",\n',
+    "    params={\"ts_code\": TS_CODE, \"start_date\": START_DATE, \"end_date\": END_DATE},\n",
+    '    fields="ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount"\n',
+    ")\n",
+    "\n",
+    'if response.get("code") == 0 and response.get("data", {}).get("items"):\n',
+    '    data = response["data"]\n',
+    '    fields_list = data["fields"]\n',
+    '    items = data["items"]\n',
+    '    print(f"数据获取成功！共 {len(items)} 条记录")\n',
+    "else:\n",
+    '    print(f"获取失败: {response.get(\'msg\', \'unknown error\')}")'
+])
+
+# === Cell 5: 转DataFrame ===
+md("## 4. 数据清洗与转换\n\n将原始数据转为 Pandas DataFrame，进行类型转换和排序。")
+code([
+    "# 转为 DataFrame\n",
+    "df = pd.DataFrame(items, columns=fields_list)\n",
+    "\n",
+    "# 类型转换\n",
+    'numeric_cols = ["open", "high", "low", "close", "pre_close", "change", "pct_chg", "vol", "amount"]\n',
+    "df[numeric_cols] = df[numeric_cols].astype(float)\n",
+    "\n",
+    "# 日期格式转换\n",
+    'df["trade_date"] = pd.to_datetime(df["trade_date"], format="%Y%m%d")\n',
+    'df.set_index("trade_date", inplace=True)\n',
+    "df.sort_index(inplace=True)\n",
+    "\n",
+    'print(f"数据范围: {df.index[0].strftime(\'%Y-%m-%d\')} ~ {df.index[-1].strftime(\'%Y-%m-%d\')}")\n',
+    'print(f"交易日数: {len(df)}")\n',
+    "df.head(10)"
+])
+
+# === Cell 6: 统计 ===
+md("### 4.1 数据概览统计")
+code([
+    'print("=== 价格统计 ===")\n',
+    'print(f"最高价: {df["high"].max():.2f}  ({df["high"].idxmax().strftime("%Y-%m-%d")})")\n',
+    'print(f"最低价: {df["low"].min():.2f}  ({df["low"].idxmin().strftime("%Y-%m-%d")})")\n',
+    'print(f"期间涨跌幅: {((df["close"].iloc[-1] / df["close"].iloc[0]) - 1) * 100:.2f}%")\n',
+    'print(f"日均成交量: {df["vol"].mean():,.0f} 手")\n',
+    "print()\n",
+    "df.describe()"
+])
+
+# === Cell 7: 存储 ===
+md("## 5. 存储数据到本地\n\n将数据保存为 JSON 和 CSV 两种格式。")
+code([
+    '# 存储为 JSON\n',
+    'json_path = "smic_daily.json"\n',
+    'records = df.reset_index().to_dict(orient="records")\n',
+    'for r in records:\n',
+    '    r["trade_date"] = r["trade_date"].strftime("%Y%m%d")\n',
+    'with open(json_path, "w", encoding="utf-8") as f:\n',
+    "    json.dump(records, f, ensure_ascii=False, indent=2)\n",
+    'print(f"JSON 已保存: {json_path} ({len(records)} 条)")\n',
+    "\n",
+    '# 存储为 CSV\n',
+    'csv_path = "smic_daily.csv"\n',
+    'df.to_csv(csv_path, encoding="utf-8-sig")\n',
+    'print(f"CSV 已保存: {csv_path}")'
+])
+
+# === Cell 8: 均线 ===
+md("## 6. 计算技术指标\n\n计算移动平均线（MA5、MA20、MA60）。")
+code([
+    '# 计算移动平均线\n',
+    'df["MA5"] = df["close"].rolling(window=5).mean()\n',
+    'df["MA20"] = df["close"].rolling(window=20).mean()\n',
+    'df["MA60"] = df["close"].rolling(window=60).mean()\n',
+    "\n",
+    'print("均线计算完成 ✅")\n',
+    'df[["close", "MA5", "MA20", "MA60"]].tail(10)'
+])
+
+# === Cell 9: K线函数 ===
+md([
+    "## 7. 绘制 K 线图\n\n",
+    "使用 Matplotlib 手动绘制蜡烛图，叠加均线。\n\n",
+    "> **A股配色**：涨为红色，跌为绿色"
+])
+code([
+    "def draw_candlestick(ax, df_data):\n",
+    '    """绘制 K 线蜡烛图"""\n',
+    "    width = 0.6\n",
+    "    for i in range(len(df_data)):\n",
+    "        x = mdates.date2num(df_data.index[i])\n",
+    '        o, h, l, c = df_data["open"].iloc[i], df_data["high"].iloc[i], df_data["low"].iloc[i], df_data["close"].iloc[i]\n',
+    "        \n",
+    '        color = "#ef4444" if c >= o else "#22c55e"  # 涨红跌绿\n',
+    "        \n",
+    "        # 影线\n",
+    "        ax.plot([x, x], [l, h], color=color, linewidth=0.8, zorder=2)\n",
+    "        \n",
+    "        # 实体\n",
+    "        bottom, height = min(o, c), abs(c - o)\n",
+    "        if height == 0: height = 0.01\n",
+    "        rect = Rectangle((x - width/2, bottom), width, height, facecolor=color, edgecolor=color, linewidth=0.8, zorder=3)\n",
+    "        ax.add_patch(rect)\n",
+    "\n",
+    'print("K线绘制函数已定义 ✅")'
+])
+
+# === Cell 10: 绘K线 ===
+code([
+    '# 创建 K 线图\n',
+    "fig, ax = plt.subplots(figsize=(16, 8))\n",
+    "draw_candlestick(ax, df)\n",
+    "\n",
+    '# 叠加均线\n',
+    'ax.plot(mdates.date2num(df.index), df["MA5"], label="MA5", color="#f59e0b", linewidth=1, alpha=0.8)\n',
+    'ax.plot(mdates.date2num(df.index), df["MA20"], label="MA20", color="#3b82f6", linewidth=1, alpha=0.8)\n',
+    'ax.plot(mdates.date2num(df.index), df["MA60"], label="MA60", color="#8b5cf6", linewidth=1, alpha=0.8)\n',
+    "\n",
+    'ax.set_title("中芯国际 (688981.SH) 日K线图  2025.07 ~ 2026.07", fontsize=16, fontweight="bold")\n',
+    'ax.set_xlabel("日期", fontsize=12)\n',
+    'ax.set_ylabel("价格（元）", fontsize=12)\n',
+    'ax.legend(loc="upper left", fontsize=11)\n',
+    'ax.grid(True, alpha=0.3, linestyle="--")\n',
+    'ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))\n',
+    "ax.xaxis.set_major_locator(mdates.MonthLocator())\n",
+    "plt.xticks(rotation=45)\n",
+    "plt.tight_layout()\n",
+    'plt.savefig("smic_kline.png", dpi=150, bbox_inches="tight")\n',
+    "plt.show()\n",
+    'print("K线图已保存 ✅")'
+])
+
+# === Cell 11: 交易量图 ===
+md("## 8. 绘制交易量图\n\n绘制与 K 线对应的成交量柱状图。")
+code([
+    '# 创建交易量图\n',
+    "fig, ax = plt.subplots(figsize=(16, 4))\n",
+    "\n",
+    '# 涨跌颜色\n',
+    'colors = ["#ef4444" if df["close"].iloc[i] >= df["open"].iloc[i] else "#22c55e" for i in range(len(df))]\n',
+    "\n",
+    'ax.bar(mdates.date2num(df.index), df["vol"], color=colors, width=0.6, alpha=0.8)\n',
+    'ax.set_title("中芯国际 (688981.SH) 日成交量  2025.07 ~ 2026.07", fontsize=14, fontweight="bold")\n',
+    'ax.set_xlabel("日期", fontsize=12)\n',
+    'ax.set_ylabel("成交量（手）", fontsize=12)\n',
+    'ax.grid(True, alpha=0.3, linestyle="--", axis="y")\n',
+    'ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))\n',
+    "ax.xaxis.set_major_locator(mdates.MonthLocator())\n",
+    "plt.xticks(rotation=45)\n",
+    "plt.tight_layout()\n",
+    'plt.savefig("smic_volume.png", dpi=150, bbox_inches="tight")\n',
+    "plt.show()\n",
+    'print("交易量图已保存 ✅")'
+])
+
+# === Cell 12: 组合图 ===
+md("## 9. K线 + 交易量 组合图\n\n上下排列，共享 X 轴。")
+code([
+    '# 组合图\n',
+    'fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(16, 10), gridspec_kw={"height_ratios": [3, 1]}, sharex=True)\n',
+    "\n",
+    "# 上图：K线\n",
+    "draw_candlestick(ax1, df)\n",
+    'ax1.plot(mdates.date2num(df.index), df["MA5"], label="MA5", color="#f59e0b", linewidth=1, alpha=0.8)\n',
+    'ax1.plot(mdates.date2num(df.index), df["MA20"], label="MA20", color="#3b82f6", linewidth=1, alpha=0.8)\n',
+    'ax1.plot(mdates.date2num(df.index), df["MA60"], label="MA60", color="#8b5cf6", linewidth=1, alpha=0.8)\n',
+    'ax1.set_title("中芯国际 (688981.SH)  K线 + 成交量  2025.07 ~ 2026.07", fontsize=16, fontweight="bold")\n',
+    'ax1.set_ylabel("价格（元）", fontsize=12)\n',
+    'ax1.legend(loc="upper left", fontsize=11)\n',
+    'ax1.grid(True, alpha=0.3, linestyle="--")\n',
+    "\n",
+    "# 下图：成交量\n",
+    'ax2.bar(mdates.date2num(df.index), df["vol"], color=colors, width=0.6, alpha=0.8)\n',
+    'ax2.set_xlabel("日期", fontsize=12)\n',
+    'ax2.set_ylabel("成交量（手）", fontsize=12)\n',
+    'ax2.grid(True, alpha=0.3, linestyle="--", axis="y")\n',
+    "\n",
+    'ax2.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))\n',
+    "ax2.xaxis.set_major_locator(mdates.MonthLocator())\n",
+    "plt.xticks(rotation=45)\n",
+    "plt.tight_layout()\n",
+    'plt.savefig("smic_kline_volume.png", dpi=150, bbox_inches="tight")\n',
+    "plt.show()\n",
+    'print("组合图已保存 ✅")'
+])
+
+# === Cell 13: 收盘价走势 ===
+md("## 10. 收盘价走势图")
+code([
+    "fig, ax = plt.subplots(figsize=(16, 5))\n",
+    'ax.plot(mdates.date2num(df.index), df["close"], color="#2563eb", linewidth=1.5, label="收盘价")\n',
+    'ax.fill_between(mdates.date2num(df.index), df["close"], alpha=0.1, color="#2563eb")\n',
+    "\n",
+    '# 标注最高最低点\n',
+    'high_idx = df["high"].idxmax()\n',
+    'low_idx = df["low"].idxmin()\n',
+    'ax.annotate(f"最高: {df.loc[high_idx, \'high\']:.2f}", xy=(mdates.date2num(high_idx), df.loc[high_idx, "high"]),\n',
+    '            xytext=(10, 15), textcoords="offset points", arrowprops=dict(arrowstyle="->", color="red"), fontsize=11, color="red")\n',
+    'ax.annotate(f"最低: {df.loc[low_idx, \'low\']:.2f}", xy=(mdates.date2num(low_idx), df.loc[low_idx, "low"]),\n',
+    '            xytext=(10, -25), textcoords="offset points", arrowprops=dict(arrowstyle="->", color="green"), fontsize=11, color="green")\n',
+    "\n",
+    'ax.set_title("中芯国际 (688981.SH) 收盘价走势  2025.07 ~ 2026.07", fontsize=16, fontweight="bold")\n',
+    'ax.set_xlabel("日期", fontsize=12)\n',
+    'ax.set_ylabel("价格（元）", fontsize=12)\n',
+    "ax.legend(fontsize=11)\n",
+    'ax.grid(True, alpha=0.3, linestyle="--")\n',
+    'ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))\n',
+    "ax.xaxis.set_major_locator(mdates.MonthLocator())\n",
+    "plt.xticks(rotation=45)\n",
+    "plt.tight_layout()\n",
+    'plt.savefig("smic_close_trend.png", dpi=150, bbox_inches="tight")\n',
+    "plt.show()\n",
+    'print("收盘价走势图已保存 ✅")'
+])
+
+# === Cell 14: 月度统计 ===
+md("## 11. 月度收益统计\n\n按月汇总涨跌幅和成交量。")
+code([
+    '# 按月统计\n',
+    'df_m = df.copy()\n',
+    'df_m["year_month"] = df_m.index.to_period("M")\n',
+    "\n",
+    'monthly = df_m.groupby("year_month").agg({"close": ["first", "last"], "vol": "sum"}).round(2)\n',
+    'monthly.columns = ["月初价", "月末价", "月成交量"]\n',
+    'monthly["月涨跌幅%"] = ((monthly["月末价"] / monthly["月初价"]) - 1) * 100\n',
+    'monthly["月涨跌幅%"] = monthly["月涨跌幅%"].round(2)\n',
+    "monthly"
+])
+
+# === Cell 15: 月度涨跌幅图 ===
+code([
+    '# 月度涨跌幅柱状图\n',
+    "fig, ax = plt.subplots(figsize=(12, 5))\n",
+    'months = [str(m) for m in monthly.index]\n',
+    'returns = monthly["月涨跌幅%"].values\n',
+    'colors_m = ["#ef4444" if r >= 0 else "#22c55e" for r in returns]\n',
+    "\n",
+    'bars = ax.bar(months, returns, color=colors_m, alpha=0.8, edgecolor="white", linewidth=0.5)\n',
+    "for bar, val in zip(bars, returns):\n",
+    "    h = bar.get_height()\n",
+    '    ax.text(bar.get_x() + bar.get_width()/2, h + (0.5 if h > 0 else -1.5), f"{val:+.1f}%", ha="center", va="bottom" if h > 0 else "top", fontsize=10)\n',
+    "\n",
+    'ax.set_title("中芯国际 月度涨跌幅统计", fontsize=14, fontweight="bold")\n',
+    'ax.set_xlabel("月份", fontsize=12)\n',
+    'ax.set_ylabel("涨跌幅（%）", fontsize=12)\n',
+    'ax.axhline(y=0, color="gray", linewidth=0.8)\n',
+    'ax.grid(True, alpha=0.3, linestyle="--", axis="y")\n',
+    "plt.tight_layout()\n",
+    'plt.savefig("smic_monthly_returns.png", dpi=150, bbox_inches="tight")\n',
+    "plt.show()\n",
+    'print("月度涨跌幅图已保存 ✅")'
+])
+
+# === 总结 ===
+md([
+    "## 总结\n\n",
+    "本 Notebook 完成了以下工作：\n\n",
+    "| 步骤 | 内容 | 输出文件 |\n",
+    "|---|---|---|\n",
+    "| 1 | 通过 Tushare API 获取日线数据 | — |\n",
+    "| 2 | 数据清洗与 DataFrame 转换 | — |\n",
+    "| 3 | 存储为 JSON / CSV | `smic_daily.json`, `smic_daily.csv` |\n",
+    "| 4 | 计算 MA5/MA20/MA60 均线 | — |\n",
+    "| 5 | 绘制 K 线蜡烛图 | `smic_kline.png` |\n",
+    "| 6 | 绘制成交量柱状图 | `smic_volume.png` |\n",
+    "| 7 | K线 + 成交量组合图 | `smic_kline_volume.png` |\n",
+    "| 8 | 收盘价走势图 | `smic_close_trend.png` |\n",
+    "| 9 | 月度涨跌幅统计与可视化 | `smic_monthly_returns.png` |\n\n",
+    "> **注意**: 运行前需安装 `pandas`、`matplotlib`，并替换 `TOKEN` 为你的 Tushare Token。\n",
+    ">\n",
+    "> ```bash\n",
+    "> pip install pandas matplotlib\n",
+    "> ```"
+])
+
+with open("smic_analysis.ipynb", "w", encoding="utf-8") as f:
+    json.dump(nb, f, ensure_ascii=False, indent=1)
+
+n_md = sum(1 for c in nb["cells"] if c["cell_type"] == "markdown")
+n_code = sum(1 for c in nb["cells"] if c["cell_type"] == "code")
+print(f"Notebook 已生成: smic_analysis.ipynb")
+print(f"Cells: {len(nb['cells'])} 个（{n_md} Markdown + {n_code} Code）")
